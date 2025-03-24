@@ -1,6 +1,7 @@
 import os
 import cv2
 import time
+import pandas as pd
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
@@ -13,44 +14,8 @@ from mot.sift import SIFTMultiObjectTracker
 from mot.base import TrackedObject, GeometricCorrector
 from mot.base_detector import BaseDetector
 from mot.sam_detector import SamDetector
+from mot.score import MultiMaskEvaluator
 
-
-class TrackedObject:
-    def __init__(self, object_id, position, frame_size):
-        self.object_id = object_id
-        self.kalman = cv2.KalmanFilter(4, 2)  # 状态4（x,y,dx,dy），观测2（x,y）
-        self.frame_size = frame_size  # (width, height)
-        
-        # 初始化卡尔曼参数
-        self.kalman.measurementMatrix = np.array([[1,0,0,0], [0,1,0,0]], np.float32)
-        self.kalman.transitionMatrix = np.array([[1,0,1,0], [0,1,0,1], 
-                                                [0,0,1,0], [0,0,0,1]], np.float32)
-        self.kalman.processNoiseCov = 1e-4 * np.eye(4, dtype=np.float32)
-        self.kalman.measurementNoiseCov = 1e-2 * np.eye(2, dtype=np.float32)
-        self.kalman.errorCovPost = 1e-1 * np.eye(4, dtype=np.float32)
-        
-        # 初始状态
-        self.kalman.statePost = np.array([[position[0]], 
-                                        [position[1]], 
-                                        [0], 
-                                        [0]], dtype=np.float32)
-        self.predicted_position = position
-        self.lost_count = 0
-
-    def predict(self):
-        # 预测下一帧位置
-        prediction = self.kalman.predict()
-        x = np.clip(prediction[0], 0, self.frame_size[0])
-        y = np.clip(prediction[1], 0, self.frame_size[1])
-        self.predicted_position = (int(x), int(y))
-        return self.predicted_position
-
-    def update(self, measurement):
-        # 用实际测量值更新滤波器
-        self.kalman.correct(np.array([[np.float32(measurement[0])], 
-                                    [np.float32(measurement[1])]]))
-        self.predicted_position = (int(measurement[0]), int(measurement[1]))
-        self.lost_count = 0
 
 def preprocess_binary(binary, min_area=10000, max_size_ratio=0.8, min_size_ratio=0.1):
     """
@@ -83,6 +48,14 @@ def preprocess_binary(binary, min_area=10000, max_size_ratio=0.8, min_size_ratio
         if bw > max_w or bh > max_h or \
             (bw < min_w and bh < min_h):
             failed_contours.append(cnt)
+            continue
+        # 过滤在边界的物体
+        h_border = int(h * 0.02)
+        w_border = int(w * 0.02)
+        if (
+            x < w_border or x+bw > w-w_border
+            # or y < h_border or y+bh > h-h_border
+        ):
             continue
             
         filtered_contours.append(cnt)
@@ -145,33 +118,47 @@ def filter_masks_by_brightness(image, binary_mask, threshold=200):
     
     return filtered_mask
 
-def track(frame_loader, save_file, camera_params):
+def track(frame_loader, save_file, camera_params, fps):
     tracked_objects = []
     next_id = 1
     max_lost = 10  # 最大允许丢失帧数
     min_tracked_count = 5  # 最小跟踪帧数
 
-    frame = next(frame_loader)
+    data = next(frame_loader)
+    frame = data['frame']
     shape = frame.shape[:2]
     fcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(save_file, fcc, 25, shape[::-1])
 
-    # detector = BaseDetector(True)
-    detector = SamDetector()
-    corrector = GeometricCorrector(shape[0], shape[1],camera_params)
-    tracker = SortTracker(corrector, max_lost)
+    columns = ['id', 'timestamp', 'latitude', 'longitude', 'speed']
+    df = pd.DataFrame(columns=columns)
 
-    for frame in frame_loader:
+    def callback(obj):
+        if obj.tracked:
+            df.loc[len(df)] = [obj.object_id, obj.meta_info.time_fmt, obj.meta_info.latitude, obj.meta_info.longitude, obj.avg_abs_speed]
+
+    detector = BaseDetector(True)
+    # detector = SamDetector()
+    corrector = GeometricCorrector(shape[0], shape[1],camera_params)
+    tracker = SortTracker(corrector, max_lost, fps, callback)
+
+    for data in frame_loader:
+        frame = data['frame']
+        ship_speed = data['speed']
+
         start = time.perf_counter()
         show_f = frame.copy()
-        binary = detector.segment(frame, 0.3)
-        print('---binary', binary ,binary.shape)
-        cv2.imshow("binary", binary)
-        cv2.waitKey(1)
+        binary = detector.segment(frame, 180)
+        # print('---binary', binary ,binary.shape)
 
         # 预处理：过滤小目标和大目标
         valid_contours, invalid_contours, areas = preprocess_binary(binary, min_area=2000)
         centroids = get_centroids(valid_contours)
+        evaluator = MultiMaskEvaluator(frame)
+        res = evaluator.evaluate_contours(valid_contours)
+        valid_contours = [res[i].pop("contour") for i in range(len(res))]
+        scores = [res[i]['total_score'] for i in range(len(res))]
+        print('----res', res)
 
         for cnt in valid_contours:
             x, y, w, h = cv2.boundingRect(cnt)
@@ -179,29 +166,35 @@ def track(frame_loader, save_file, camera_params):
         
         cv2.drawContours(show_f, invalid_contours, -1, (0, 0, 255), 2)
         cv2.drawContours(show_f, valid_contours, -1, (0, 255, 0), 2)
-        for cnt, area in zip(valid_contours, areas):
+        # for cnt, area in zip(valid_contours, areas):
+        for cnt, area in zip(valid_contours, scores):
             x, y, bw, bh = cv2.boundingRect(cnt)
-            cv2.putText(show_f, f"area:{area}", 
+            cv2.putText(show_f, f"area:{area:.3f}", 
                        (x, y),
                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (50, 50, 50), 2)
-
 
         # 绘制有效目标的质心
         centroids = get_centroids(valid_contours)
         for (cx, cy) in centroids:
             cv2.circle(show_f, (cx, cy), 5, (255, 0, 0), -1)
 
-        tracked_objects = tracker.update(frame, valid_contours, centroids)
+        tracked_objects = tracker.update(frame, ship_speed, centroids, data)
         print('----tra', tracked_objects)
         # 绘制结果
         for obj in tracked_objects:
             if obj.tracked_count < min_tracked_count:
                 continue
+
+            # speed = obj.speed
+            velocity_vector = obj.velocity_vector
+            speed = np.sqrt(velocity_vector[0]**2 + velocity_vector[1]**2)
+            speed = ship_speed - speed
+
             # 绘制预测位置（蓝色）
             cv2.circle(show_f, obj.predicted_position, 5, (255, 0, 0), 2)
             # 绘制实际位置（绿色）
             cv2.circle(show_f, obj.measurement_position, 7, (0, 255, 0), 2)
-            cv2.putText(show_f, f"ID:{obj.object_id}:{obj.speed:.2f}", 
+            cv2.putText(show_f, f"ID:{obj.object_id}:{speed:.2f}:{obj.abs_speed:.2f}:{obj.avg_abs_speed:.2f}", 
                        (obj.predicted_position[0], obj.predicted_position[1]+40),
                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (20, 20, 20), 2)
 
@@ -212,6 +205,8 @@ def track(frame_loader, save_file, camera_params):
             break
         end = time.perf_counter()
         print(f"---time: {end-start}")
+
+    df.to_csv('speed.csv', index=False)
 
     cv2.destroyAllWindows()
     out.release()

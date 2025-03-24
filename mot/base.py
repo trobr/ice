@@ -3,6 +3,15 @@ import math
 import cv2
 import numpy as np
 from collections import deque
+from dataclasses import dataclass
+
+
+@dataclass
+class TrackedObjectMetaInfo(object):
+    latitude: float
+    longitude: float
+    time_fmt: str
+
 
 
 class TrackedObjectOld:
@@ -214,12 +223,18 @@ class TrackedObjectWithRealSpeed:
         
         # 速度跟踪相关
         self.speed_history = deque(maxlen=fps)  # 保存1秒内的速度记录
+        self.abs_speed_history = deque(maxlen=fps)  # 保存1秒内的绝对速度记录
+        self.avg_abs_speed = 0.0  # 平均速度 (m/s)
         self.velocity = (0.0, 0.0)  # 当前速度 (m/s)
 
         self.predicted_position = pixel_pos
         self.measurement_position = pixel_pos
         self.lost_count = 0
         self.tracked_count = 0
+        self.tracked = False
+    
+    def set_meta_info(self, meta_info: TrackedObjectMetaInfo):
+        self.meta_info = meta_info
 
     def _init_kalman(self, init_x, init_y):
         """ 初始化卡尔曼滤波器参数 """
@@ -256,7 +271,7 @@ class TrackedObjectWithRealSpeed:
         self.predicted_position = self.measurement_position
         return (prediction[0][0], prediction[1][0])
 
-    def update(self, pixel_measurement):
+    def update(self, pixel_measurement, ship_speed):
         """
         更新测量值（输入为像素坐标）
         :param pixel_measurement: (x_pixel, y_pixel)
@@ -264,6 +279,8 @@ class TrackedObjectWithRealSpeed:
         self.measurement_position = (int(pixel_measurement[0]), int(pixel_measurement[1]))
         self.lost_count = 0
         self.tracked_count += 1
+        if self.tracked_count > self.fps * 2:
+            self.tracked = True
 
         # 转换为物理坐标
         x_meter, y_meter = self.corrector.pixel_to_meter(*pixel_measurement)
@@ -280,6 +297,12 @@ class TrackedObjectWithRealSpeed:
         # 记录速度
         speed = np.sqrt(vx**2 + vy**2)
         self.speed_history.append(speed)
+        abs_speed = ship_speed - speed
+        self.abs_speed_history.append(abs_speed)
+        if self.tracked_count <= self.fps * 2:
+            self.avg_abs_speed = abs_speed
+        else:
+            self.avg_abs_speed += (abs_speed - self.avg_abs_speed) / self.tracked_count
         self.velocity = (vx, vy)
         
         return (state[0][0], state[1][0])
@@ -290,7 +313,14 @@ class TrackedObjectWithRealSpeed:
         if not self.speed_history:
             return 0.0
         return np.mean(self.speed_history)
-    
+
+    @property
+    def abs_speed(self):
+        """ 获取平均绝对速度（m/s） """
+        if not self.abs_speed_history:
+            return 0.0
+        return np.mean(self.abs_speed_history)
+
     @property
     def velocity_vector(self):
         """ 获取当前速度矢量 (vx, vy) m/s """

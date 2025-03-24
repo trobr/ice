@@ -10,6 +10,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "4"  # numexpr 线程数
 
 
 from mot.track import track
+from video_data_loader import EnhancedShipDataLoader
 
 
 def floder_image_loader(path: str):
@@ -71,13 +72,12 @@ if __name__ == "__main__":
         'incline_angle': 78.7,
         'photo_size': (0.3454, 0.4606),
     }
-    path = r'C:\Users\jianjian\Downloads\flow2\flow2\6'
-    # loader = floder_image_loader(path)
-    path = r'C:\Users\jianjian\Downloads\flow0307\D03_20240910083145_low.mp4'
-    path = '/Users/trobr/Downloads/D03_20240910083145.mp4'
-    # loader = video_loader(path)
-    loader = video_loader_optimized(path, 1)
-    # for img in loader:
-    #     cv2.imshow("ice", img)
-    #     cv2.waitKey(0)
-    track(loader, 'result.mp4', camera_params)
+
+    fps_target = 5
+
+    loader = EnhancedShipDataLoader(
+        data_path='/Users/trobr/Downloads/Track_gps.csv',
+        video_path='/Users/trobr/Downloads/D03_20240910083145.mp4',
+        fps_target=5,
+    )
+    track(loader, 'result.mp4', camera_params, fps_target)

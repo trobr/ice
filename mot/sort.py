@@ -6,7 +6,7 @@ from scipy.optimize import linear_sum_assignment
 
 from segment import adaptive_threshold_blocks, histogram_stretching
 from dehaze import dehaze
-from mot.base import TrackedObject
+from mot.base import TrackedObject, TrackedObjectMetaInfo
 
 
 def preprocess_binary(binary, min_area=10000, max_size_ratio=0.9, min_size_ratio=0.1):
@@ -101,13 +101,15 @@ def filter_masks_by_brightness(image, binary_mask, threshold=200):
 
 
 class SortTracker(object):
-    def __init__(self, corrector, max_lost=10):
+    def __init__(self, corrector, fps, max_lost=10, callback=None):
         self.tracked_objects = []
         self.max_lost = max_lost
         self.next_id = 0
         self.corrector = corrector
+        self.fps = fps
+        self.callback = callback
 
-    def update(self, frame, contours, centroids):
+    def update(self, frame, ship_speed, centroids, data):
         frame_size = frame.shape[1], frame.shape[0]
         # 预测所有现有目标的位置
         for obj in self.tracked_objects:
@@ -138,20 +140,25 @@ class SortTracker(object):
 
         # 更新匹配目标
         for r, c in matches:
-            self.tracked_objects[r].update(centroids[c])
+            self.tracked_objects[r].update(centroids[c], ship_speed)
 
         # 标记未匹配的现有目标
         unmatched_existing = set(range(len(self.tracked_objects))) - set([r for r, _ in matches])
         # 逆序删除避免索引错误
         for i in sorted(unmatched_existing, reverse=True):
             self.tracked_objects[i].lost_count += 1
-            if self.tracked_objects[i].lost_count > self.max_lost:
+            # 删除没有连续丢失的目标或者没有初始化跟踪到2s的目标
+            if self.tracked_objects[i].lost_count > self.max_lost or not self.tracked_objects[i].tracked:
+                if self.callback:
+                    self.callback(self.tracked_objects[i])
                 self.tracked_objects.pop(i)
-
+            
         # 处理新目标
         unmatched_new = set(range(len(centroids))) - set([c for _, c in matches])
+        meta_info = TrackedObjectMetaInfo(data['latitude'], data['longitude'], data['timestamp'].strftime("%Y-%m-%d %H:%M:%S"))
         for j in unmatched_new:
-            new_obj = TrackedObject(self.next_id, centroids[j], frame_size, corrector=self.corrector)
+            new_obj = TrackedObject(self.next_id, centroids[j], frame_size, corrector=self.corrector, fps=self.fps)
+            new_obj.set_meta_info(meta_info)
             self.tracked_objects.append(new_obj)
             self.next_id += 1
 

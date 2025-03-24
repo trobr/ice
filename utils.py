@@ -2,6 +2,9 @@ import cv2
 import torch
 import numpy as np
 
+from segment import adaptive_threshold_blocks, histogram_stretching
+from dehaze import dehaze
+
 
 def cv2_img_to_tensor(img):
     """
@@ -15,6 +18,8 @@ def cv2_img_to_tensor(img):
     """
     # torch.from_numpy(cv2.cvtColor(immm, cv2.COLOR_BGR2RGB).astype(np.float32)/255.)[None,]
     # 将图像从BGR转换为RGB
+    # # img = histogram_stretching(img)
+    # img = dehaze(img)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     # 将numpy数组转换为PyTorch张量
     tensor = torch.from_numpy(img.astype(np.float32) / 255.0)[None, ]

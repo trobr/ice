@@ -179,17 +179,26 @@ def adaptive_threshold_blocks(image, row=16, col=1, start_row=3, start_col=0, al
         image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     binary = _adaptive_threshold_blocks(image, row, col, start_row, start_col, algo, min_threshold)
     kernel = np.ones((15, 15), dtype=np.uint8)
+    # binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+    # binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+    binary = cv2.dilate(binary, np.ones((7, 7), dtype=np.uint8), iterations=1)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+
     return binary
 
 
-def histogram_stretching(img):
+def histogram_stretching(img, clahe=False):
     # 计算当前像素的最小值和最大值
     # lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
     # 仅对亮度通道 L 做均衡化
-    l_eq = cv2.equalizeHist(l)
+    if clahe:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_eq = clahe.apply(l)
+    else:
+        l_eq = cv2.equalizeHist(l)
     lab_eq = cv2.merge((l_eq, a, b))
     # img = cv2.cvtColor(lab_eq, cv2.COLOR_LAB2BGR)
     img = cv2.cvtColor(lab_eq, cv2.COLOR_LAB2RGB)
