@@ -13,8 +13,15 @@ class TrackedObjectMetaInfo(object):
     time_fmt: str
 
 
+class TrackedObjectBase(object):
+    def __init__(self):
+        self.meta_info: TrackedObjectMetaInfo = None
 
-class TrackedObjectOld:
+    def set_meta_info(self, meta_info: TrackedObjectMetaInfo):
+        self.meta_info = meta_info
+
+
+class TrackedObjectOld(TrackedObjectBase):
     def __init__(self, object_id, position, frame_size):
         self.object_id = object_id
         self.kalman = cv2.KalmanFilter(4, 2)  # 状态4（x,y,dx,dy），观测2（x,y）
@@ -57,7 +64,7 @@ class TrackedObjectOld:
         return 0
 
 
-class TrackedObjectWithSpeed:
+class TrackedObjectWithSpeed(TrackedObjectBase):
     def __init__(self, object_id, position, frame_size, fps=25):
         self.object_id = object_id
         self.kalman = cv2.KalmanFilter(4, 2)  # 状态4（x,y,dx,dy），观测2（x,y）
@@ -201,7 +208,7 @@ class GeometricCorrector:
         )
 
 # ---------------------- 跟踪对象模块 ----------------------
-class TrackedObjectWithRealSpeed:
+class TrackedObjectWithRealSpeed(TrackedObjectBase):
     def __init__(self, object_id, pixel_pos, frame_size, corrector, fps=25):
         """
         跟踪对象类（物理单位版本）
@@ -233,9 +240,6 @@ class TrackedObjectWithRealSpeed:
         self.tracked_count = 0
         self.tracked = False
     
-    def set_meta_info(self, meta_info: TrackedObjectMetaInfo):
-        self.meta_info = meta_info
-
     def _init_kalman(self, init_x, init_y):
         """ 初始化卡尔曼滤波器参数 """
         # 状态转移矩阵 (匀速模型)
